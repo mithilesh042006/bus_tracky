@@ -31,6 +31,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
   Map<String, RouteModel> _routes = {};
 
   BusModel? _selectedBus;
+  BusStop? _directionStop; // Stop to show directions to
   bool _isLoading = true;
   LatLng? _currentPosition;
 
@@ -168,37 +169,173 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
   }
 
   void _updatePolylines() {
-    if (_selectedBus == null || _selectedBus!.routeId == null) {
-      setState(() {
-        _polylines.clear();
-      });
-      return;
+    final newPolylines = <Polyline>{};
+
+    // Route polyline (connecting all stops)
+    if (_selectedBus != null && _selectedBus!.routeId != null) {
+      final route = _routes[_selectedBus!.routeId];
+      if (route != null && route.stops.isNotEmpty) {
+        final points = route.stops.map((s) => LatLng(s.lat, s.lng)).toList();
+        newPolylines.add(
+          Polyline(
+            polylineId: PolylineId('route_${route.id}'),
+            points: points,
+            color: const Color(0xFF3949AB),
+            width: 4,
+          ),
+        );
+      }
     }
 
-    final route = _routes[_selectedBus!.routeId];
-    if (route == null || route.stops.isEmpty) return;
-
-    final points = route.stops.map((s) => LatLng(s.lat, s.lng)).toList();
+    // Direction polyline (from user to selected stop)
+    if (_directionStop != null && _currentPosition != null) {
+      newPolylines.add(
+        Polyline(
+          polylineId: const PolylineId('direction'),
+          points: [
+            _currentPosition!,
+            LatLng(_directionStop!.lat, _directionStop!.lng),
+          ],
+          color: Colors.green,
+          width: 5,
+          patterns: [PatternItem.dash(20), PatternItem.gap(10)],
+        ),
+      );
+    }
 
     setState(() {
       _polylines.clear();
-      _polylines.add(
-        Polyline(
-          polylineId: PolylineId('route_${route.id}'),
-          points: points,
-          color: const Color(0xFF3949AB),
-          width: 4,
-        ),
-      );
+      _polylines.addAll(newPolylines);
     });
   }
 
   void _selectBus(BusModel bus) {
     setState(() {
       _selectedBus = bus;
+      _directionStop = null; // Clear direction when selecting new bus
     });
     _updateMarkers();
     _showBusDetails(bus);
+  }
+
+  /// Find the nearest stop from user's current location
+  BusStop? _findNearestStop(List<BusStop> stops) {
+    if (_currentPosition == null || stops.isEmpty) return null;
+
+    BusStop? nearest;
+    double minDistance = double.infinity;
+
+    for (var stop in stops) {
+      final distance = _locationService.calculateDistance(
+        startLat: _currentPosition!.latitude,
+        startLng: _currentPosition!.longitude,
+        endLat: stop.lat,
+        endLng: stop.lng,
+      );
+      if (distance < minDistance) {
+        minDistance = distance;
+        nearest = stop;
+      }
+    }
+    return nearest;
+  }
+
+  /// Show directions to a specific stop
+  void _showDirectionsToStop(BusStop stop) {
+    setState(() {
+      _directionStop = stop;
+    });
+    _updateMarkers();
+    _updatePolylines();
+
+    // Zoom to show both user and stop
+    if (_currentPosition != null && _mapController != null) {
+      final bounds = LatLngBounds(
+        southwest: LatLng(
+          _currentPosition!.latitude < stop.lat
+              ? _currentPosition!.latitude
+              : stop.lat,
+          _currentPosition!.longitude < stop.lng
+              ? _currentPosition!.longitude
+              : stop.lng,
+        ),
+        northeast: LatLng(
+          _currentPosition!.latitude > stop.lat
+              ? _currentPosition!.latitude
+              : stop.lat,
+          _currentPosition!.longitude > stop.lng
+              ? _currentPosition!.longitude
+              : stop.lng,
+        ),
+      );
+      _mapController!.animateCamera(CameraUpdate.newLatLngBounds(bounds, 100));
+    }
+
+    // Show distance info
+    if (_currentPosition != null) {
+      final distance = _locationService.calculateDistance(
+        startLat: _currentPosition!.latitude,
+        startLng: _currentPosition!.longitude,
+        endLat: stop.lat,
+        endLng: stop.lng,
+      );
+      final distanceText = distance >= 1000
+          ? '${(distance / 1000).toStringAsFixed(1)} km'
+          : '${distance.round()} m';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.directions_walk, color: Colors.white),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Directions to ${stop.name}: $distanceText'),
+              ),
+            ],
+          ),
+          backgroundColor: Colors.green.shade600,
+          duration: const Duration(seconds: 3),
+          action: SnackBarAction(
+            label: 'Clear',
+            textColor: Colors.white,
+            onPressed: _clearDirections,
+          ),
+        ),
+      );
+    }
+  }
+
+  /// Clear directions
+  void _clearDirections() {
+    setState(() {
+      _directionStop = null;
+    });
+    _updatePolylines();
+  }
+
+  /// Show directions to nearest stop
+  void _showDirectionsToNearestStop() {
+    if (_selectedBus == null || _selectedBus!.routeId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a bus first')),
+      );
+      return;
+    }
+
+    final route = _routes[_selectedBus!.routeId];
+    if (route == null || route.stops.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No stops available for this route')),
+      );
+      return;
+    }
+
+    final nearest = _findNearestStop(route.stops);
+    if (nearest != null) {
+      Navigator.pop(context); // Close bottom sheet
+      _showDirectionsToStop(nearest);
+    }
   }
 
   void _showBusDetails(BusModel bus) {
@@ -317,11 +454,30 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
             // Route stops
             if (route != null && route.stops.isNotEmpty) ...[
               const SizedBox(height: 20),
-              const Text(
-                'Stops',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Stops',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  TextButton.icon(
+                    onPressed: _showDirectionsToNearestStop,
+                    icon: const Icon(Icons.near_me, size: 18),
+                    label: const Text('Nearest'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.green.shade700,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
+              const Text(
+                'Tap a stop for directions',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+              const SizedBox(height: 8),
               SizedBox(
                 height: 100,
                 child: ListView.builder(
@@ -329,30 +485,43 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                   itemCount: route.stops.length,
                   itemBuilder: (context, index) {
                     final stop = route.stops[index];
-                    return Container(
-                      width: 120,
-                      margin: const EdgeInsets.only(right: 12),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade100,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.location_on, color: Colors.grey.shade600),
-                          const SizedBox(height: 8),
-                          Text(
-                            stop.name,
-                            textAlign: TextAlign.center,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                            ),
+                    return GestureDetector(
+                      onTap: () {
+                        Navigator.pop(context); // Close bottom sheet
+                        _showDirectionsToStop(stop);
+                      },
+                      child: Container(
+                        width: 120,
+                        margin: const EdgeInsets.only(right: 12),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Colors.green.shade200,
+                            width: 1,
                           ),
-                        ],
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.directions,
+                              color: Colors.green.shade600,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              stop.name,
+                              textAlign: TextAlign.center,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     );
                   },

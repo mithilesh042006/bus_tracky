@@ -28,6 +28,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   BusModel? _assignedBus;
   RouteModel? _assignedRoute;
+  BusStop? _directionStop; // Stop to show directions to
   bool _isLoading = true;
   bool _isTripActive = false;
   bool _isStartingTrip = false;
@@ -141,20 +142,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   void _updatePolylines() {
-    if (_assignedRoute == null || _assignedRoute!.stops.isEmpty) {
-      setState(() {
-        _polylines.clear();
-      });
-      return;
-    }
+    final newPolylines = <Polyline>{};
 
-    final points = _assignedRoute!.stops
-        .map((s) => LatLng(s.lat, s.lng))
-        .toList();
-
-    setState(() {
-      _polylines.clear();
-      _polylines.add(
+    // Route polyline (connecting all stops)
+    if (_assignedRoute != null && _assignedRoute!.stops.isNotEmpty) {
+      final points = _assignedRoute!.stops
+          .map((s) => LatLng(s.lat, s.lng))
+          .toList();
+      newPolylines.add(
         Polyline(
           polylineId: PolylineId('route_${_assignedRoute!.id}'),
           points: points,
@@ -162,6 +157,27 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           width: 4,
         ),
       );
+    }
+
+    // Direction polyline (from current location to selected stop)
+    if (_directionStop != null && _currentPosition != null) {
+      newPolylines.add(
+        Polyline(
+          polylineId: const PolylineId('direction'),
+          points: [
+            _currentPosition!,
+            LatLng(_directionStop!.lat, _directionStop!.lng),
+          ],
+          color: Colors.green,
+          width: 5,
+          patterns: [PatternItem.dash(20), PatternItem.gap(10)],
+        ),
+      );
+    }
+
+    setState(() {
+      _polylines.clear();
+      _polylines.addAll(newPolylines);
     });
   }
 
@@ -278,6 +294,112 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   Future<void> _stopLocationStreaming() async {
     await _locationSubscription?.cancel();
     _locationSubscription = null;
+  }
+
+  /// Find the nearest stop from current bus location
+  BusStop? _findNearestStop() {
+    if (_currentPosition == null || _assignedRoute == null) return null;
+    if (_assignedRoute!.stops.isEmpty) return null;
+
+    BusStop? nearest;
+    double minDistance = double.infinity;
+
+    for (var stop in _assignedRoute!.stops) {
+      final distance = _locationService.calculateDistance(
+        startLat: _currentPosition!.latitude,
+        startLng: _currentPosition!.longitude,
+        endLat: stop.lat,
+        endLng: stop.lng,
+      );
+      if (distance < minDistance) {
+        minDistance = distance;
+        nearest = stop;
+      }
+    }
+    return nearest;
+  }
+
+  /// Show directions to a specific stop
+  void _showDirectionsToStop(BusStop stop) {
+    setState(() {
+      _directionStop = stop;
+    });
+    _updatePolylines();
+
+    // Zoom to show both bus location and stop
+    if (_currentPosition != null && _mapController != null) {
+      final bounds = LatLngBounds(
+        southwest: LatLng(
+          _currentPosition!.latitude < stop.lat
+              ? _currentPosition!.latitude
+              : stop.lat,
+          _currentPosition!.longitude < stop.lng
+              ? _currentPosition!.longitude
+              : stop.lng,
+        ),
+        northeast: LatLng(
+          _currentPosition!.latitude > stop.lat
+              ? _currentPosition!.latitude
+              : stop.lat,
+          _currentPosition!.longitude > stop.lng
+              ? _currentPosition!.longitude
+              : stop.lng,
+        ),
+      );
+      _mapController!.animateCamera(CameraUpdate.newLatLngBounds(bounds, 100));
+    }
+
+    // Show distance info
+    if (_currentPosition != null) {
+      final distance = _locationService.calculateDistance(
+        startLat: _currentPosition!.latitude,
+        startLng: _currentPosition!.longitude,
+        endLat: stop.lat,
+        endLng: stop.lng,
+      );
+      final distanceText = distance >= 1000
+          ? '${(distance / 1000).toStringAsFixed(1)} km'
+          : '${distance.round()} m';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.navigation, color: Colors.white),
+              const SizedBox(width: 8),
+              Expanded(child: Text('Next stop: ${stop.name} - $distanceText')),
+            ],
+          ),
+          backgroundColor: Colors.green.shade600,
+          duration: const Duration(seconds: 3),
+          action: SnackBarAction(
+            label: 'Clear',
+            textColor: Colors.white,
+            onPressed: _clearDirections,
+          ),
+        ),
+      );
+    }
+  }
+
+  /// Clear directions
+  void _clearDirections() {
+    setState(() {
+      _directionStop = null;
+    });
+    _updatePolylines();
+  }
+
+  /// Navigate to nearest stop
+  void _navigateToNearestStop() {
+    final nearest = _findNearestStop();
+    if (nearest != null) {
+      _showDirectionsToStop(nearest);
+    } else {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('No stops available')));
+    }
   }
 
   Future<void> _signOut() async {
@@ -573,69 +695,124 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         // Route stops (if available)
         if (_assignedRoute != null && _assignedRoute!.stops.isNotEmpty)
           Container(
-            height: 100,
             margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: _assignedRoute!.stops.length,
-              itemBuilder: (context, index) {
-                final stop = _assignedRoute!.stops[index];
-                return Container(
-                  width: 140,
-                  margin: const EdgeInsets.only(right: 12),
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
-                        blurRadius: 5,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+            child: Column(
+              children: [
+                // Header with Nearest button
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            width: 24,
-                            height: 24,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF3949AB),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Center(
-                              child: Text(
-                                '${index + 1}',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
+                      const Text(
+                        'Route Stops',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        stop.name,
-                        textAlign: TextAlign.center,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
+                      TextButton.icon(
+                        onPressed: _navigateToNearestStop,
+                        icon: const Icon(Icons.near_me, size: 16),
+                        label: const Text('Nearest'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.green.shade700,
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
                         ),
                       ),
                     ],
                   ),
-                );
-              },
+                ),
+                // Stop cards
+                SizedBox(
+                  height: 100,
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: _assignedRoute!.stops.length,
+                    itemBuilder: (context, index) {
+                      final stop = _assignedRoute!.stops[index];
+                      final isSelected = _directionStop?.name == stop.name;
+                      return GestureDetector(
+                        onTap: () => _showDirectionsToStop(stop),
+                        child: Container(
+                          width: 140,
+                          margin: const EdgeInsets.only(right: 12),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? Colors.green.shade50
+                                : Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: isSelected
+                                  ? Colors.green
+                                  : Colors.transparent,
+                              width: 2,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withAlpha(13),
+                                blurRadius: 5,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Container(
+                                    width: 24,
+                                    height: 24,
+                                    decoration: BoxDecoration(
+                                      color: isSelected
+                                          ? Colors.green
+                                          : const Color(0xFF3949AB),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Center(
+                                      child: isSelected
+                                          ? const Icon(
+                                              Icons.navigation,
+                                              color: Colors.white,
+                                              size: 14,
+                                            )
+                                          : Text(
+                                              '${index + 1}',
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                stop.name,
+                                textAlign: TextAlign.center,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: isSelected
+                                      ? Colors.green.shade700
+                                      : Colors.black87,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
           ),
       ],
