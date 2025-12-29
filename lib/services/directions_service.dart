@@ -124,4 +124,60 @@ class DirectionsService {
       return null;
     }
   }
+
+  /// Get route polyline through multiple stops (waypoints)
+  /// This fetches road-based routes between each consecutive pair of stops
+  Future<List<LatLng>> getMultiStopRoutePolyline({
+    required List<LatLng> stops,
+    String mode = 'driving',
+  }) async {
+    if (stops.isEmpty) return [];
+    if (stops.length == 1) return stops;
+    if (stops.length == 2) {
+      return getRoutePolyline(
+        origin: stops[0],
+        destination: stops[1],
+        mode: mode,
+      );
+    }
+
+    // For routes with waypoints, use Google Directions API with waypoints parameter
+    try {
+      final origin = stops.first;
+      final destination = stops.last;
+
+      // Build waypoints string (intermediate stops)
+      final waypoints = stops
+          .sublist(1, stops.length - 1)
+          .map((s) => '${s.latitude},${s.longitude}')
+          .join('|');
+
+      final url = Uri.parse(
+        '$_baseUrl?'
+        'origin=${origin.latitude},${origin.longitude}'
+        '&destination=${destination.latitude},${destination.longitude}'
+        '&waypoints=$waypoints'
+        '&mode=$mode'
+        '&key=$_apiKey',
+      );
+
+      final response = await http.get(url);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        if (data['status'] == 'OK' && data['routes'].isNotEmpty) {
+          final route = data['routes'][0];
+          final overviewPolyline = route['overview_polyline']['points'];
+          return _decodePolyline(overviewPolyline);
+        }
+      }
+
+      // Fallback: return straight lines between stops
+      return stops;
+    } catch (e) {
+      // On exception, return straight lines between stops
+      return stops;
+    }
+  }
 }

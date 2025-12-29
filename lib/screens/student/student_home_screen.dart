@@ -34,7 +34,9 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
 
   BusModel? _selectedBus;
   BusStop? _directionStop; // Stop to show directions to
-  List<LatLng> _directionRoutePoints = []; // Road route points
+  List<LatLng> _directionRoutePoints = []; // Road route points (user to stop)
+  Map<String, List<LatLng>> _routePolylinePoints =
+      {}; // Road route points between stops
   bool _isLoading = true;
   LatLng? _currentPosition;
 
@@ -174,11 +176,16 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
   void _updatePolylines() {
     final newPolylines = <Polyline>{};
 
-    // Route polyline (connecting all stops)
+    // Route polyline (connecting all stops) - uses road route if available
     if (_selectedBus != null && _selectedBus!.routeId != null) {
       final route = _routes[_selectedBus!.routeId];
       if (route != null && route.stops.isNotEmpty) {
-        final points = route.stops.map((s) => LatLng(s.lat, s.lng)).toList();
+        // Use cached road route if available, otherwise use straight lines
+        final routeKey = route.id;
+        final points = _routePolylinePoints.containsKey(routeKey)
+            ? _routePolylinePoints[routeKey]!
+            : route.stops.map((s) => LatLng(s.lat, s.lng)).toList();
+
         newPolylines.add(
           Polyline(
             polylineId: PolylineId('route_${route.id}'),
@@ -216,12 +223,46 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
     });
   }
 
+  /// Fetch road route between all stops for a route
+  Future<void> _fetchRoutePolyline(RouteModel route) async {
+    if (route.stops.length < 2) return;
+    if (_routePolylinePoints.containsKey(route.id)) return; // Already fetched
+
+    final stopPoints = route.stops.map((s) => LatLng(s.lat, s.lng)).toList();
+
+    try {
+      final routePoints = await _directionsService.getMultiStopRoutePolyline(
+        stops: stopPoints,
+        mode: 'driving', // Bus follows driving routes
+      );
+
+      if (mounted) {
+        setState(() {
+          _routePolylinePoints[route.id] = routePoints;
+        });
+        _updatePolylines();
+      }
+    } catch (e) {
+      debugPrint('Failed to fetch route polyline: $e');
+    }
+  }
+
   void _selectBus(BusModel bus) {
     setState(() {
       _selectedBus = bus;
       _directionStop = null; // Clear direction when selecting new bus
+      _directionRoutePoints = [];
     });
     _updateMarkers();
+
+    // Fetch road route for this bus's route
+    if (bus.routeId != null) {
+      final route = _routes[bus.routeId];
+      if (route != null) {
+        _fetchRoutePolyline(route);
+      }
+    }
+
     _showBusDetails(bus);
   }
 

@@ -31,7 +31,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   BusModel? _assignedBus;
   RouteModel? _assignedRoute;
   BusStop? _directionStop; // Stop to show directions to
-  List<LatLng> _directionRoutePoints = []; // Road route points
+  List<LatLng> _directionRoutePoints = []; // Road route points (bus to stop)
+  List<LatLng> _routePolylinePoints = []; // Road route points between all stops
   bool _isLoading = true;
   bool _isTripActive = false;
   bool _isStartingTrip = false;
@@ -70,6 +71,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         if (bus.routeId != null) {
           _assignedRoute = await _databaseService.getRouteById(bus.routeId!);
           _updatePolylines();
+          // Fetch road route between stops (non-blocking)
+          _fetchRoutePolyline();
         }
       }
 
@@ -147,11 +150,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   void _updatePolylines() {
     final newPolylines = <Polyline>{};
 
-    // Route polyline (connecting all stops)
+    // Route polyline (connecting all stops) - uses road route if available
     if (_assignedRoute != null && _assignedRoute!.stops.isNotEmpty) {
-      final points = _assignedRoute!.stops
-          .map((s) => LatLng(s.lat, s.lng))
-          .toList();
+      // Use cached road route if available, otherwise use straight lines
+      final points = _routePolylinePoints.isNotEmpty
+          ? _routePolylinePoints
+          : _assignedRoute!.stops.map((s) => LatLng(s.lat, s.lng)).toList();
+
       newPolylines.add(
         Polyline(
           polylineId: PolylineId('route_${_assignedRoute!.id}'),
@@ -186,6 +191,32 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       _polylines.clear();
       _polylines.addAll(newPolylines);
     });
+  }
+
+  /// Fetch road route between all stops for the assigned route
+  Future<void> _fetchRoutePolyline() async {
+    if (_assignedRoute == null || _assignedRoute!.stops.length < 2) return;
+    if (_routePolylinePoints.isNotEmpty) return; // Already fetched
+
+    final stopPoints = _assignedRoute!.stops
+        .map((s) => LatLng(s.lat, s.lng))
+        .toList();
+
+    try {
+      final routePoints = await _directionsService.getMultiStopRoutePolyline(
+        stops: stopPoints,
+        mode: 'driving', // Bus follows driving routes
+      );
+
+      if (mounted) {
+        setState(() {
+          _routePolylinePoints = routePoints;
+        });
+        _updatePolylines();
+      }
+    } catch (e) {
+      debugPrint('Failed to fetch route polyline: $e');
+    }
   }
 
   Future<void> _toggleTrip() async {
