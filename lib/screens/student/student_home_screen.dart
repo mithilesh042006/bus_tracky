@@ -136,6 +136,29 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
       }
     }
 
+    // Add stop markers when a bus is selected
+    if (_selectedBus != null && _selectedBus!.routeId != null) {
+      final route = _routes[_selectedBus!.routeId];
+      if (route != null && route.stops.isNotEmpty) {
+        for (int i = 0; i < route.stops.length; i++) {
+          final stop = route.stops[i];
+          newMarkers.add(
+            Marker(
+              markerId: MarkerId('stop_${route.id}_$i'),
+              position: LatLng(stop.lat, stop.lng),
+              icon: BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueBlue,
+              ),
+              infoWindow: InfoWindow(
+                title: '${i + 1}. ${stop.name}',
+                snippet: 'Bus Stop',
+              ),
+            ),
+          );
+        }
+      }
+    }
+
     setState(() {
       _markers.clear();
       _markers.addAll(newMarkers);

@@ -5,6 +5,7 @@ import '../../models/user_model.dart';
 import '../../models/bus_model.dart';
 import '../../models/route_model.dart';
 import '../auth/login_screen.dart';
+import 'map_stop_picker_screen.dart';
 
 /// Admin home screen with bus, route, and driver management
 class AdminHomeScreen extends StatefulWidget {
@@ -425,12 +426,12 @@ class _RoutesTab extends StatelessWidget {
 
   void _showAddRouteDialog(BuildContext context) {
     final nameController = TextEditingController();
-    final List<BusStop> stops = [];
+    List<BusStop> stops = [];
 
     showDialog(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
           title: const Text('Add New Route'),
           content: SingleChildScrollView(
             child: Column(
@@ -453,39 +454,111 @@ class _RoutesTab extends StatelessWidget {
                       'Stops',
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
-                    TextButton.icon(
-                      onPressed: () =>
-                          _showAddStopDialog(context, stops, setDialogState),
-                      icon: const Icon(Icons.add),
-                      label: const Text('Add Stop'),
+                    ElevatedButton.icon(
+                      onPressed: () async {
+                        // Navigate to map picker
+                        final result = await Navigator.push<List<BusStop>>(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                MapStopPickerScreen(existingStops: stops),
+                          ),
+                        );
+                        if (result != null) {
+                          setDialogState(() {
+                            stops = result;
+                          });
+                        }
+                      },
+                      icon: const Icon(Icons.map, size: 18),
+                      label: Text(
+                        stops.isEmpty ? 'Select on Map' : 'Edit Stops',
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF3949AB),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                      ),
                     ),
                   ],
                 ),
-                if (stops.isNotEmpty)
-                  ...stops.asMap().entries.map(
-                    (entry) => ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: CircleAvatar(
-                        radius: 14,
-                        backgroundColor: const Color(0xFF3949AB),
-                        child: Text(
-                          '${entry.key + 1}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
+                const SizedBox(height: 12),
+                if (stops.isEmpty)
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.grey.shade300),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.info_outline, color: Colors.grey.shade600),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text(
+                            'Tap "Select on Map" to add stops by tapping on the map',
+                            style: TextStyle(fontSize: 13),
                           ),
                         ),
+                      ],
+                    ),
+                  )
+                else
+                  ...stops.asMap().entries.map(
+                    (entry) => Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey.shade200),
                       ),
-                      title: Text(entry.value.name),
-                      subtitle: Text(
-                        'Lat: ${entry.value.lat.toStringAsFixed(4)}, Lng: ${entry.value.lng.toStringAsFixed(4)}',
-                        style: const TextStyle(fontSize: 11),
-                      ),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.delete, size: 20),
-                        onPressed: () {
-                          setDialogState(() => stops.removeAt(entry.key));
-                        },
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 24,
+                            height: 24,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFF3949AB),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Center(
+                              child: Text(
+                                '${entry.key + 1}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  entry.value.name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                Text(
+                                  '${entry.value.lat.toStringAsFixed(4)}, ${entry.value.lng.toStringAsFixed(4)}',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -494,110 +567,43 @@ class _RoutesTab extends StatelessWidget {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () => Navigator.pop(dialogContext),
               child: const Text('Cancel'),
             ),
             ElevatedButton(
               onPressed: () async {
-                if (nameController.text.trim().isNotEmpty) {
+                if (nameController.text.trim().isNotEmpty && stops.isNotEmpty) {
                   final route = RouteModel(
                     id: '',
                     routeName: nameController.text.trim(),
                     stops: stops,
                   );
                   await databaseService.createRoute(route);
-                  if (context.mounted) Navigator.pop(context);
+                  if (dialogContext.mounted) Navigator.pop(dialogContext);
+                } else if (nameController.text.trim().isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Please enter a route name'),
+                      backgroundColor: Colors.orange,
+                    ),
+                  );
+                } else if (stops.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Please add at least one stop'),
+                      backgroundColor: Colors.orange,
+                    ),
+                  );
                 }
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF3949AB),
                 foregroundColor: Colors.white,
               ),
-              child: const Text('Create'),
+              child: const Text('Create Route'),
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  void _showAddStopDialog(
-    BuildContext context,
-    List<BusStop> stops,
-    StateSetter setDialogState,
-  ) {
-    final nameController = TextEditingController();
-    final latController = TextEditingController();
-    final lngController = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Stop'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              decoration: const InputDecoration(
-                labelText: 'Stop Name',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: latController,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'Latitude',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextField(
-                    controller: lngController,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'Longitude',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (nameController.text.trim().isNotEmpty &&
-                  latController.text.trim().isNotEmpty &&
-                  lngController.text.trim().isNotEmpty) {
-                final stop = BusStop(
-                  name: nameController.text.trim(),
-                  lat: double.tryParse(latController.text.trim()) ?? 0.0,
-                  lng: double.tryParse(lngController.text.trim()) ?? 0.0,
-                );
-                setDialogState(() => stops.add(stop));
-                Navigator.pop(context);
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF3949AB),
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('Add'),
-          ),
-        ],
       ),
     );
   }
