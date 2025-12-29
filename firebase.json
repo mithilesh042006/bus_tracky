@@ -1,0 +1,1 @@
+{"flutter":{"platforms":{"android":{"default":{"projectId":"canpustracker","appId":"1:805617417634:android:0c40c7abac0caa792486fb","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"canpustracker","configurations":{"android":"1:805617417634:android:0c40c7abac0caa792486fb","ios":"1:805617417634:ios:8eaa0dbef380e8af2486fb"}}}}}}

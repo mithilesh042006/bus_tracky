@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "805617417634",
+    "project_id": "canpustracker",
+    "storage_bucket": "canpustracker.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:805617417634:android:0c40c7abac0caa792486fb",
+        "android_client_info": {
+          "package_name": "com.example.bus_tracker"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAkYR1PaY5qtihpUjVMrtmJQy9CqBSjKnA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
