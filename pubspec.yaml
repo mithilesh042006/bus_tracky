@@ -53,6 +53,7 @@ dependencies:
 
   # Utilities
   intl: ^0.20.1
+  http: ^1.2.0
 
 dev_dependencies:
   flutter_test:

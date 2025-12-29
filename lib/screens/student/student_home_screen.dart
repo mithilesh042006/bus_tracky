@@ -4,6 +4,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../services/auth_service.dart';
 import '../../services/database_service.dart';
 import '../../services/location_service.dart';
+import '../../services/directions_service.dart';
 import '../../models/bus_model.dart';
 import '../../models/route_model.dart';
 import '../../models/live_tracking_model.dart';
@@ -21,6 +22,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
   final AuthService _authService = AuthService();
   final DatabaseService _databaseService = DatabaseService();
   final LocationService _locationService = LocationService();
+  final DirectionsService _directionsService = DirectionsService();
 
   GoogleMapController? _mapController;
   final Set<Marker> _markers = {};
@@ -32,6 +34,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
 
   BusModel? _selectedBus;
   BusStop? _directionStop; // Stop to show directions to
+  List<LatLng> _directionRoutePoints = []; // Road route points
   bool _isLoading = true;
   LatLng? _currentPosition;
 
@@ -187,18 +190,22 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
       }
     }
 
-    // Direction polyline (from user to selected stop)
+    // Direction polyline (from user to selected stop) - uses road route
     if (_directionStop != null && _currentPosition != null) {
+      // Use road route points if available, otherwise use direct line
+      final directionPoints = _directionRoutePoints.isNotEmpty
+          ? _directionRoutePoints
+          : [
+              _currentPosition!,
+              LatLng(_directionStop!.lat, _directionStop!.lng),
+            ];
+
       newPolylines.add(
         Polyline(
           polylineId: const PolylineId('direction'),
-          points: [
-            _currentPosition!,
-            LatLng(_directionStop!.lat, _directionStop!.lng),
-          ],
+          points: directionPoints,
           color: Colors.green,
           width: 5,
-          patterns: [PatternItem.dash(20), PatternItem.gap(10)],
         ),
       );
     }
@@ -241,15 +248,39 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
   }
 
   /// Show directions to a specific stop
-  void _showDirectionsToStop(BusStop stop) {
+  Future<void> _showDirectionsToStop(BusStop stop) async {
+    if (_currentPosition == null) return;
+
     setState(() {
       _directionStop = stop;
+      _directionRoutePoints = []; // Clear old route
     });
+
+    // Show initial straight line while fetching
     _updateMarkers();
     _updatePolylines();
 
+    // Fetch road route from Google Directions API
+    try {
+      final routePoints = await _directionsService.getRoutePolyline(
+        origin: _currentPosition!,
+        destination: LatLng(stop.lat, stop.lng),
+        mode: 'walking', // Walking directions for students
+      );
+
+      if (mounted && _directionStop?.name == stop.name) {
+        setState(() {
+          _directionRoutePoints = routePoints;
+        });
+        _updatePolylines();
+      }
+    } catch (e) {
+      // Fallback to straight line on error
+      debugPrint('Failed to fetch route: $e');
+    }
+
     // Zoom to show both user and stop
-    if (_currentPosition != null && _mapController != null) {
+    if (_mapController != null) {
       final bounds = LatLngBounds(
         southwest: LatLng(
           _currentPosition!.latitude < stop.lat
@@ -272,26 +303,24 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
     }
 
     // Show distance info
-    if (_currentPosition != null) {
-      final distance = _locationService.calculateDistance(
-        startLat: _currentPosition!.latitude,
-        startLng: _currentPosition!.longitude,
-        endLat: stop.lat,
-        endLng: stop.lng,
-      );
-      final distanceText = distance >= 1000
-          ? '${(distance / 1000).toStringAsFixed(1)} km'
-          : '${distance.round()} m';
+    final distance = _locationService.calculateDistance(
+      startLat: _currentPosition!.latitude,
+      startLng: _currentPosition!.longitude,
+      endLat: stop.lat,
+      endLng: stop.lng,
+    );
+    final distanceText = distance >= 1000
+        ? '${(distance / 1000).toStringAsFixed(1)} km'
+        : '${distance.round()} m';
 
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Row(
             children: [
               const Icon(Icons.directions_walk, color: Colors.white),
               const SizedBox(width: 8),
-              Expanded(
-                child: Text('Directions to ${stop.name}: $distanceText'),
-              ),
+              Expanded(child: Text('Walking to ${stop.name}: $distanceText')),
             ],
           ),
           backgroundColor: Colors.green.shade600,
@@ -310,6 +339,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
   void _clearDirections() {
     setState(() {
       _directionStop = null;
+      _directionRoutePoints = [];
     });
     _updatePolylines();
   }

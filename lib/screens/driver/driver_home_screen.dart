@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import '../../services/auth_service.dart';
 import '../../services/database_service.dart';
 import '../../services/location_service.dart';
+import '../../services/directions_service.dart';
 import '../../models/bus_model.dart';
 import '../../models/route_model.dart';
 import '../auth/login_screen.dart';
@@ -21,6 +22,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   final AuthService _authService = AuthService();
   final DatabaseService _databaseService = DatabaseService();
   final LocationService _locationService = LocationService();
+  final DirectionsService _directionsService = DirectionsService();
 
   GoogleMapController? _mapController;
   final Set<Marker> _markers = {};
@@ -29,6 +31,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   BusModel? _assignedBus;
   RouteModel? _assignedRoute;
   BusStop? _directionStop; // Stop to show directions to
+  List<LatLng> _directionRoutePoints = []; // Road route points
   bool _isLoading = true;
   bool _isTripActive = false;
   bool _isStartingTrip = false;
@@ -159,18 +162,22 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       );
     }
 
-    // Direction polyline (from current location to selected stop)
+    // Direction polyline (from current location to selected stop) - uses road route
     if (_directionStop != null && _currentPosition != null) {
+      // Use road route points if available, otherwise use direct line
+      final directionPoints = _directionRoutePoints.isNotEmpty
+          ? _directionRoutePoints
+          : [
+              _currentPosition!,
+              LatLng(_directionStop!.lat, _directionStop!.lng),
+            ];
+
       newPolylines.add(
         Polyline(
           polylineId: const PolylineId('direction'),
-          points: [
-            _currentPosition!,
-            LatLng(_directionStop!.lat, _directionStop!.lng),
-          ],
+          points: directionPoints,
           color: Colors.green,
           width: 5,
-          patterns: [PatternItem.dash(20), PatternItem.gap(10)],
         ),
       );
     }
@@ -320,14 +327,38 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   /// Show directions to a specific stop
-  void _showDirectionsToStop(BusStop stop) {
+  Future<void> _showDirectionsToStop(BusStop stop) async {
+    if (_currentPosition == null) return;
+
     setState(() {
       _directionStop = stop;
+      _directionRoutePoints = []; // Clear old route
     });
+
+    // Show initial straight line while fetching
     _updatePolylines();
 
+    // Fetch road route from Google Directions API
+    try {
+      final routePoints = await _directionsService.getRoutePolyline(
+        origin: _currentPosition!,
+        destination: LatLng(stop.lat, stop.lng),
+        mode: 'driving', // Driving directions for bus
+      );
+
+      if (mounted && _directionStop?.name == stop.name) {
+        setState(() {
+          _directionRoutePoints = routePoints;
+        });
+        _updatePolylines();
+      }
+    } catch (e) {
+      // Fallback to straight line on error
+      debugPrint('Failed to fetch route: $e');
+    }
+
     // Zoom to show both bus location and stop
-    if (_currentPosition != null && _mapController != null) {
+    if (_mapController != null) {
       final bounds = LatLngBounds(
         southwest: LatLng(
           _currentPosition!.latitude < stop.lat
@@ -350,17 +381,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     }
 
     // Show distance info
-    if (_currentPosition != null) {
-      final distance = _locationService.calculateDistance(
-        startLat: _currentPosition!.latitude,
-        startLng: _currentPosition!.longitude,
-        endLat: stop.lat,
-        endLng: stop.lng,
-      );
-      final distanceText = distance >= 1000
-          ? '${(distance / 1000).toStringAsFixed(1)} km'
-          : '${distance.round()} m';
+    final distance = _locationService.calculateDistance(
+      startLat: _currentPosition!.latitude,
+      startLng: _currentPosition!.longitude,
+      endLat: stop.lat,
+      endLng: stop.lng,
+    );
+    final distanceText = distance >= 1000
+        ? '${(distance / 1000).toStringAsFixed(1)} km'
+        : '${distance.round()} m';
 
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Row(
@@ -386,6 +417,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   void _clearDirections() {
     setState(() {
       _directionStop = null;
+      _directionRoutePoints = [];
     });
     _updatePolylines();
   }
