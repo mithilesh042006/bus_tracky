@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:geocoding/geocoding.dart';
 import '../../services/location_service.dart';
 import '../../models/route_model.dart';
 
@@ -18,14 +19,20 @@ class _MapStopPickerScreenState extends State<MapStopPickerScreen> {
   final LocationService _locationService = LocationService();
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _stopNameController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
 
   GoogleMapController? _mapController;
   List<BusStop> _stops = [];
   final Set<Marker> _markers = {};
 
   LatLng? _selectedLocation;
+  String? _selectedPlaceName;
   LatLng _currentCenter = const LatLng(12.9716, 77.5946); // Default: Bangalore
   bool _isLoading = true;
+  bool _isSearching = false;
+  String? _searchError;
+  List<Map<String, dynamic>> _searchResults = [];
+  Timer? _debounceTimer;
 
   @override
   void initState() {
@@ -77,7 +84,9 @@ class _MapStopPickerScreenState extends State<MapStopPickerScreen> {
           markerId: const MarkerId('selected'),
           position: _selectedLocation!,
           icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-          infoWindow: const InfoWindow(title: 'Selected Location'),
+          infoWindow: InfoWindow(
+            title: _selectedPlaceName ?? 'Selected Location',
+          ),
         ),
       );
     }
@@ -88,18 +97,152 @@ class _MapStopPickerScreenState extends State<MapStopPickerScreen> {
     });
   }
 
+  void _onSearchChanged(String query) {
+    _debounceTimer?.cancel();
+
+    if (query.trim().isEmpty) {
+      setState(() {
+        _searchResults = [];
+        _isSearching = false;
+        _searchError = null;
+      });
+      return;
+    }
+
+    setState(() {
+      _isSearching = true;
+      _searchError = null;
+    });
+
+    _debounceTimer = Timer(const Duration(milliseconds: 500), () {
+      _searchPlaces(query.trim());
+    });
+  }
+
+  Future<void> _searchPlaces(String query) async {
+    try {
+      final locations = await locationFromAddress(query);
+
+      if (!mounted) return;
+
+      if (locations.isEmpty) {
+        setState(() {
+          _searchResults = [];
+          _searchError = 'No places found for "$query"';
+          _isSearching = false;
+        });
+        return;
+      }
+
+      final results = <Map<String, dynamic>>[];
+
+      for (var location in locations.take(5)) {
+        // Try to get place name from coordinates
+        try {
+          final placemarks = await placemarkFromCoordinates(
+            location.latitude,
+            location.longitude,
+          );
+
+          if (placemarks.isNotEmpty) {
+            final place = placemarks.first;
+            final nameParts = <String>[];
+            if (place.name != null && place.name!.isNotEmpty) {
+              nameParts.add(place.name!);
+            }
+            if (place.subLocality != null && place.subLocality!.isNotEmpty) {
+              nameParts.add(place.subLocality!);
+            }
+            if (place.locality != null && place.locality!.isNotEmpty) {
+              nameParts.add(place.locality!);
+            }
+            if (place.administrativeArea != null &&
+                place.administrativeArea!.isNotEmpty) {
+              nameParts.add(place.administrativeArea!);
+            }
+
+            final name = nameParts.isNotEmpty ? nameParts.join(', ') : query;
+
+            results.add({
+              'name': name,
+              'lat': location.latitude,
+              'lng': location.longitude,
+            });
+          } else {
+            results.add({
+              'name': query,
+              'lat': location.latitude,
+              'lng': location.longitude,
+            });
+          }
+        } catch (e) {
+          results.add({
+            'name': query,
+            'lat': location.latitude,
+            'lng': location.longitude,
+          });
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _searchResults = results;
+          _searchError = results.isEmpty
+              ? 'No places found for "$query"'
+              : null;
+          _isSearching = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _searchResults = [];
+          _searchError =
+              'No places found. Try a more specific search like "MG Road, Bangalore"';
+          _isSearching = false;
+        });
+      }
+    }
+  }
+
+  void _selectSearchResult(Map<String, dynamic> result) {
+    final lat = result['lat'] as double;
+    final lng = result['lng'] as double;
+    final name = result['name'] as String;
+
+    setState(() {
+      _selectedLocation = LatLng(lat, lng);
+      _selectedPlaceName = name;
+      _searchResults = [];
+      _searchController.clear();
+    });
+
+    _searchFocusNode.unfocus();
+    _updateMarkers();
+
+    _mapController?.animateCamera(
+      CameraUpdate.newLatLngZoom(LatLng(lat, lng), 16),
+    );
+
+    _showAddStopDialog(suggestedName: name);
+  }
+
   void _onMapTap(LatLng position) {
     setState(() {
       _selectedLocation = position;
+      _selectedPlaceName = null;
+      _searchResults = [];
     });
+    _searchController.clear();
+    _searchFocusNode.unfocus();
     _updateMarkers();
     _showAddStopDialog();
   }
 
-  void _showAddStopDialog() {
+  void _showAddStopDialog({String? suggestedName}) {
     if (_selectedLocation == null) return;
 
-    _stopNameController.clear();
+    _stopNameController.text = suggestedName ?? '';
 
     showDialog(
       context: context,
@@ -111,7 +254,7 @@ class _MapStopPickerScreenState extends State<MapStopPickerScreen> {
           children: [
             TextField(
               controller: _stopNameController,
-              autofocus: true,
+              autofocus: suggestedName == null,
               decoration: const InputDecoration(
                 labelText: 'Stop Name',
                 hintText: 'e.g., Main Gate, Library',
@@ -131,6 +274,7 @@ class _MapStopPickerScreenState extends State<MapStopPickerScreen> {
             onPressed: () {
               setState(() {
                 _selectedLocation = null;
+                _selectedPlaceName = null;
               });
               _updateMarkers();
               Navigator.pop(context);
@@ -148,6 +292,7 @@ class _MapStopPickerScreenState extends State<MapStopPickerScreen> {
                 setState(() {
                   _stops.add(stop);
                   _selectedLocation = null;
+                  _selectedPlaceName = null;
                 });
                 _updateMarkers();
                 Navigator.pop(context);
@@ -211,7 +356,9 @@ class _MapStopPickerScreenState extends State<MapStopPickerScreen> {
   void dispose() {
     _searchController.dispose();
     _stopNameController.dispose();
+    _searchFocusNode.dispose();
     _mapController?.dispose();
+    _debounceTimer?.cancel();
     super.dispose();
   }
 
@@ -254,50 +401,236 @@ class _MapStopPickerScreenState extends State<MapStopPickerScreen> {
                   mapToolbarEnabled: false,
                 ),
 
-                // Instructions card
+                // Search bar
                 Positioned(
                   top: 16,
                   left: 16,
                   right: 16,
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withAlpha(25),
-                          blurRadius: 10,
-                          offset: const Offset(0, 2),
+                  child: Column(
+                    children: [
+                      // Search input
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withAlpha(25),
+                              blurRadius: 10,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF3949AB).withAlpha(25),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Icon(
-                            Icons.touch_app,
-                            color: Color(0xFF3949AB),
-                            size: 20,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Text(
-                            'Tap on the map to add bus stops',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
+                        child: TextField(
+                          controller: _searchController,
+                          focusNode: _searchFocusNode,
+                          onChanged: _onSearchChanged,
+                          decoration: InputDecoration(
+                            hintText: 'Search places...',
+                            prefixIcon: const Icon(
+                              Icons.search,
+                              color: Color(0xFF3949AB),
+                            ),
+                            suffixIcon: _searchController.text.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(Icons.clear),
+                                    onPressed: () {
+                                      _searchController.clear();
+                                      setState(() {
+                                        _searchResults = [];
+                                      });
+                                    },
+                                  )
+                                : null,
+                            border: InputBorder.none,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 14,
                             ),
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+
+                      // Search results
+                      if (_isSearching)
+                        Container(
+                          margin: const EdgeInsets.only(top: 8),
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withAlpha(25),
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                              SizedBox(width: 12),
+                              Text('Searching...'),
+                            ],
+                          ),
+                        )
+                      else if (_searchResults.isNotEmpty)
+                        Container(
+                          margin: const EdgeInsets.only(top: 8),
+                          constraints: const BoxConstraints(maxHeight: 250),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withAlpha(25),
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: ListView.separated(
+                            shrinkWrap: true,
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            itemCount: _searchResults.length,
+                            separatorBuilder: (_, __) =>
+                                const Divider(height: 1),
+                            itemBuilder: (context, index) {
+                              final result = _searchResults[index];
+                              return ListTile(
+                                leading: Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: const Color(
+                                      0xFF3949AB,
+                                    ).withAlpha(25),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Icon(
+                                    Icons.location_on,
+                                    color: Color(0xFF3949AB),
+                                    size: 20,
+                                  ),
+                                ),
+                                title: Text(
+                                  result['name'],
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                subtitle: Text(
+                                  '${(result['lat'] as double).toStringAsFixed(4)}, ${(result['lng'] as double).toStringAsFixed(4)}',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                ),
+                                onTap: () => _selectSearchResult(result),
+                              );
+                            },
+                          ),
+                        ),
+
+                      // No results / error message
+                      if (_searchError != null &&
+                          !_isSearching &&
+                          _searchResults.isEmpty)
+                        Container(
+                          margin: const EdgeInsets.only(top: 8),
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withAlpha(25),
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.orange.shade100,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Icon(
+                                  Icons.search_off,
+                                  color: Colors.orange.shade700,
+                                  size: 20,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  _searchError!,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.grey.shade700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                      // Hint card (shown when not searching)
+                      if (_searchResults.isEmpty &&
+                          !_isSearching &&
+                          _searchError == null &&
+                          _searchController.text.isEmpty)
+                        Container(
+                          margin: const EdgeInsets.only(top: 12),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withAlpha(25),
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF3949AB).withAlpha(25),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Icon(
+                                  Icons.touch_app,
+                                  color: Color(0xFF3949AB),
+                                  size: 20,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              const Expanded(
+                                child: Text(
+                                  'Search for a place or tap on the map',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
                   ),
                 ),
 

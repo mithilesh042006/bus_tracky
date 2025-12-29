@@ -658,8 +658,17 @@ class _RouteCard extends StatelessWidget {
                   ),
                 ),
                 IconButton(
+                  icon: const Icon(
+                    Icons.edit_outlined,
+                    color: Color(0xFF3949AB),
+                  ),
+                  onPressed: () => _showEditDialog(context),
+                  tooltip: 'Edit Route',
+                ),
+                IconButton(
                   icon: Icon(Icons.delete_outline, color: Colors.red.shade400),
                   onPressed: () => _confirmDelete(context),
+                  tooltip: 'Delete Route',
                 ),
               ],
             ),
@@ -705,6 +714,147 @@ class _RouteCard extends StatelessWidget {
                 ),
               ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showEditDialog(BuildContext context) {
+    final nameController = TextEditingController(text: route.routeName);
+    List<BusStop> stops = List.from(route.stops);
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('Edit Route'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Route Name',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Stops (${stops.length})',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed: () async {
+                        final result = await Navigator.push<List<BusStop>>(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                MapStopPickerScreen(existingStops: stops),
+                          ),
+                        );
+                        if (result != null) {
+                          setDialogState(() {
+                            stops = result;
+                          });
+                        }
+                      },
+                      icon: const Icon(Icons.map, size: 18),
+                      label: const Text('Edit Stops'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF3949AB),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                if (stops.isEmpty)
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Text('No stops added'),
+                  )
+                else
+                  ...stops.asMap().entries.map(
+                    (entry) => Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey.shade200),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 24,
+                            height: 24,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFF3949AB),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Center(
+                              child: Text(
+                                '${entry.key + 1}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              entry.value.name,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                if (nameController.text.trim().isNotEmpty) {
+                  final updatedRoute = route.copyWith(
+                    routeName: nameController.text.trim(),
+                    stops: stops,
+                  );
+                  await databaseService.updateRoute(updatedRoute);
+                  if (dialogContext.mounted) Navigator.pop(dialogContext);
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF3949AB),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Save'),
+            ),
           ],
         ),
       ),

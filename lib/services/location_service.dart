@@ -100,12 +100,20 @@ class LocationService {
     required double distanceInMeters,
     double averageSpeedKmh = 30.0,
   }) {
+    // Prevent division by zero - if speed is 0 or negative, use default speed
+    if (averageSpeedKmh <= 0) {
+      averageSpeedKmh = 30.0;
+    }
     // Convert speed to m/s
     double speedMs = averageSpeedKmh * 1000 / 3600;
     // Calculate time in seconds
     double timeSeconds = distanceInMeters / speedMs;
-    // Return time in minutes
-    return timeSeconds / 60;
+    // Return time in minutes, capped at reasonable max (24 hours)
+    double minutes = timeSeconds / 60;
+    if (minutes.isNaN || minutes.isInfinite) {
+      return 0;
+    }
+    return minutes.clamp(0, 1440); // Max 24 hours
   }
 
   /// Calculate ETA from current position to a destination

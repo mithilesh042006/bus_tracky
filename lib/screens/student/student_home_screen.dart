@@ -390,10 +390,20 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
       endLng: _currentPosition!.longitude,
     );
 
+    // Use default speed if tracking speed is null, 0, or invalid
+    final speed = (tracking.speed != null && tracking.speed! > 0)
+        ? tracking.speed!
+        : 30.0;
+
     final etaMinutes = _locationService.calculateETA(
       distanceInMeters: distance,
-      averageSpeedKmh: tracking.speed ?? 30.0,
+      averageSpeedKmh: speed,
     );
+
+    // Safety check for NaN or Infinity
+    if (etaMinutes.isNaN || etaMinutes.isInfinite || etaMinutes < 0) {
+      return 'Calculating...';
+    }
 
     if (etaMinutes < 1) {
       return 'Less than 1 min';
