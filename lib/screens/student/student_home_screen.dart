@@ -5,10 +5,16 @@ import '../../services/auth_service.dart';
 import '../../services/database_service.dart';
 import '../../services/location_service.dart';
 import '../../services/directions_service.dart';
+import '../../services/notification_service.dart';
 import '../../models/bus_model.dart';
 import '../../models/route_model.dart';
 import '../../models/live_tracking_model.dart';
+import '../../models/user_model.dart';
+import '../../models/alarm_model.dart';
 import '../auth/login_screen.dart';
+import 'report_issue_screen.dart';
+import 'set_alarm_screen.dart';
+import 'student_profile_screen.dart';
 
 /// Student home screen with live bus tracking map
 class StudentHomeScreen extends StatefulWidget {
@@ -23,6 +29,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
   final DatabaseService _databaseService = DatabaseService();
   final LocationService _locationService = LocationService();
   final DirectionsService _directionsService = DirectionsService();
+  final NotificationService _notificationService = NotificationService();
 
   GoogleMapController? _mapController;
   final Set<Marker> _markers = {};
@@ -31,6 +38,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
   List<BusModel> _buses = [];
   Map<String, LiveTrackingModel> _liveLocations = {};
   Map<String, RouteModel> _routes = {};
+  List<AlarmModel> _activeAlarms = [];
 
   BusModel? _selectedBus;
   BusStop? _directionStop; // Stop to show directions to
@@ -42,6 +50,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
 
   StreamSubscription? _busSubscription;
   StreamSubscription? _liveTrackingSubscription;
+  StreamSubscription? _alarmSubscription;
 
   // Default center (can be your college location)
   static const LatLng _defaultCenter = LatLng(12.9716, 77.5946); // Bangalore
@@ -50,12 +59,18 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
   void initState() {
     super.initState();
     _initializeData();
+    _initNotifications();
+  }
+
+  Future<void> _initNotifications() async {
+    await _notificationService.initialize();
   }
 
   Future<void> _initializeData() async {
     await _getCurrentLocation();
     _listenToBuses();
     _listenToLiveTracking();
+    _listenToAlarms();
   }
 
   Future<void> _getCurrentLocation() async {
@@ -97,7 +112,83 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
     ) {
       _liveLocations = {for (var t in trackingList) t.busId: t};
       _updateMarkers();
+      _checkAlarms(); // Check if any alarms should trigger
     });
+  }
+
+  void _listenToAlarms() {
+    final user = _authService.currentUser;
+    if (user == null) return;
+
+    _alarmSubscription = _databaseService.getStudentAlarms(user.uid).listen((
+      alarms,
+    ) {
+      setState(() {
+        _activeAlarms = alarms;
+      });
+    });
+  }
+
+  /// Check if any active alarms should trigger based on bus positions
+  void _checkAlarms() {
+    for (var alarm in _activeAlarms) {
+      if (!alarm.isActive || alarm.hasTriggered) continue;
+
+      // Get bus location
+      final tracking = _liveLocations[alarm.busId];
+      if (tracking == null || tracking.isStale) continue;
+
+      // Calculate distance from bus to stop
+      final distance = _locationService.calculateDistance(
+        startLat: tracking.lat,
+        startLng: tracking.lng,
+        endLat: alarm.stopLat,
+        endLng: alarm.stopLng,
+      );
+
+      // Check if bus is within alarm distance
+      if (distance <= alarm.alarmDistance) {
+        _triggerAlarm(alarm, distance);
+      }
+    }
+  }
+
+  /// Trigger an alarm notification
+  Future<void> _triggerAlarm(AlarmModel alarm, double distance) async {
+    // Mark alarm as triggered in database
+    await _databaseService.triggerAlarm(alarm.id);
+
+    // Show notification
+    final distanceText = distance >= 1000
+        ? '${(distance / 1000).toStringAsFixed(1)} km'
+        : '${distance.round()} m';
+
+    await _notificationService.showBusAlarmNotification(
+      busNumber: alarm.busNumber,
+      stopName: alarm.stopName,
+      distance: distanceText,
+    );
+
+    // Also show in-app snackbar if app is open
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.alarm, color: Colors.white),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '🚌 Bus ${alarm.busNumber} is $distanceText from ${alarm.stopName}!',
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: Colors.green.shade600,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    }
   }
 
   void _updateMarkers() {
@@ -136,7 +227,10 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
               title: 'Bus ${bus.busNumber}',
               snippet: 'Tap for details',
             ),
-            onTap: () => _selectBus(bus),
+            onTap: () {
+              _selectBus(bus);
+              _showBusDetails(bus);
+            },
           ),
         );
       }
@@ -409,197 +503,334 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
     }
   }
 
-  void _showBusDetails(BusModel bus) {
+  void _showBusDetails(BusModel bus) async {
     final tracking = _liveLocations[bus.id];
     final route = bus.routeId != null ? _routes[bus.routeId] : null;
+
+    // Fetch driver info if bus is active and has a driver
+    UserModel? driver;
+    if (bus.driverId != null && bus.isActive) {
+      driver = await _databaseService.getDriverById(bus.driverId!);
+    }
+
+    if (!mounted) return;
 
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
+      isScrollControlled: true,
       builder: (context) => Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.7,
+        ),
         decoration: const BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
         padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Handle bar
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade300,
-                  borderRadius: BorderRadius.circular(2),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Handle bar
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 20),
+              const SizedBox(height: 20),
 
-            // Bus info header
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF3949AB).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Icon(
-                    Icons.directions_bus,
-                    color: Color(0xFF3949AB),
-                    size: 32,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Bus ${bus.busNumber}',
-                        style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      if (route != null)
-                        Text(
-                          route.routeName,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey.shade600,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: tracking != null && !tracking.isStale
-                        ? Colors.green.shade100
-                        : Colors.orange.shade100,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    tracking != null && !tracking.isStale ? 'LIVE' : 'OFFLINE',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: tracking != null && !tracking.isStale
-                          ? Colors.green.shade700
-                          : Colors.orange.shade700,
+              // Bus info header
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF3949AB).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.directions_bus,
+                      color: Color(0xFF3949AB),
+                      size: 32,
                     ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-
-            // ETA info
-            if (tracking != null &&
-                !tracking.isStale &&
-                _currentPosition != null) ...[
-              _buildInfoRow(
-                icon: Icons.timer_outlined,
-                label: 'ETA',
-                value: _calculateETA(tracking),
-              ),
-              const SizedBox(height: 12),
-              _buildInfoRow(
-                icon: Icons.speed,
-                label: 'Speed',
-                value: tracking.speed != null
-                    ? '${tracking.speed!.toStringAsFixed(1)} km/h'
-                    : 'N/A',
-              ),
-            ],
-
-            // Route stops
-            if (route != null && route.stops.isNotEmpty) ...[
-              const SizedBox(height: 20),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Stops',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Bus ${bus.busNumber}',
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        if (route != null)
+                          Text(
+                            route.routeName,
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
-                  TextButton.icon(
-                    onPressed: _showDirectionsToNearestStop,
-                    icon: const Icon(Icons.near_me, size: 18),
-                    label: const Text('Nearest'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.green.shade700,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: tracking != null && !tracking.isStale
+                          ? Colors.green.shade100
+                          : Colors.orange.shade100,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      tracking != null && !tracking.isStale
+                          ? 'LIVE'
+                          : 'OFFLINE',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: tracking != null && !tracking.isStale
+                            ? Colors.green.shade700
+                            : Colors.orange.shade700,
+                      ),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-              const Text(
-                'Tap a stop for directions',
-                style: TextStyle(fontSize: 12, color: Colors.grey),
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                height: 100,
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: route.stops.length,
-                  itemBuilder: (context, index) {
-                    final stop = route.stops[index];
-                    return GestureDetector(
-                      onTap: () {
-                        Navigator.pop(context); // Close bottom sheet
-                        _showDirectionsToStop(stop);
-                      },
-                      child: Container(
-                        width: 120,
-                        margin: const EdgeInsets.only(right: 12),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade100,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: Colors.green.shade200,
-                            width: 1,
-                          ),
-                        ),
+
+              // Driver info (only shown when trip is active)
+              if (driver != null && bus.isActive) ...[
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.blue.shade100),
+                  ),
+                  child: Row(
+                    children: [
+                      // Driver photo or avatar
+                      CircleAvatar(
+                        radius: 24,
+                        backgroundColor: Colors.blue.shade200,
+                        backgroundImage: driver.photoUrl != null
+                            ? NetworkImage(driver.photoUrl!)
+                            : null,
+                        child: driver.photoUrl == null
+                            ? Icon(
+                                Icons.person,
+                                color: Colors.blue.shade700,
+                                size: 28,
+                              )
+                            : null,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
                         child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Icon(
-                              Icons.directions,
-                              color: Colors.green.shade600,
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              stop.name,
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                            const Text(
+                              'Driver',
+                              style: TextStyle(
                                 fontSize: 12,
-                                fontWeight: FontWeight.w500,
+                                color: Colors.grey,
+                              ),
+                            ),
+                            Text(
+                              driver.name,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
                           ],
                         ),
                       ),
+                      Icon(
+                        Icons.verified,
+                        color: Colors.blue.shade600,
+                        size: 20,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
+              const SizedBox(height: 20),
+
+              // ETA info
+              if (tracking != null &&
+                  !tracking.isStale &&
+                  _currentPosition != null) ...[
+                _buildInfoRow(
+                  icon: Icons.timer_outlined,
+                  label: 'ETA',
+                  value: _calculateETA(tracking),
+                ),
+                const SizedBox(height: 12),
+                _buildInfoRow(
+                  icon: Icons.speed,
+                  label: 'Speed',
+                  value: tracking.speed != null
+                      ? '${tracking.speed!.toStringAsFixed(1)} km/h'
+                      : 'N/A',
+                ),
+              ],
+
+              // Route stops
+              if (route != null && route.stops.isNotEmpty) ...[
+                const SizedBox(height: 20),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Stops',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: _showDirectionsToNearestStop,
+                      icon: const Icon(Icons.near_me, size: 18),
+                      label: const Text('Nearest'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.green.shade700,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Tap a stop for directions',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 100,
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: route.stops.length,
+                    itemBuilder: (context, index) {
+                      final stop = route.stops[index];
+                      return GestureDetector(
+                        onTap: () {
+                          Navigator.pop(context); // Close bottom sheet
+                          _showDirectionsToStop(stop);
+                        },
+                        child: Container(
+                          width: 120,
+                          margin: const EdgeInsets.only(right: 12),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: Colors.green.shade200,
+                              width: 1,
+                            ),
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.directions,
+                                color: Colors.green.shade600,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                stop.name,
+                                textAlign: TextAlign.center,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+
+              // Report Issue button
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) =>
+                            ReportIssueScreen(selectedBus: bus),
+                      ),
                     );
                   },
+                  icon: const Icon(Icons.report_outlined),
+                  label: const Text('Report an Issue'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.orange.shade700,
+                    side: BorderSide(color: Colors.orange.shade300),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
                 ),
               ),
+
+              // Set Alarm button (only if route exists)
+              if (route != null && route.stops.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              SetAlarmScreen(bus: bus, route: route),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.alarm_add),
+                    label: const Text('Set Bus Alarm'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green.shade600,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
@@ -671,6 +902,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
   void dispose() {
     _busSubscription?.cancel();
     _liveTrackingSubscription?.cancel();
+    _alarmSubscription?.cancel();
     _mapController?.dispose();
     super.dispose();
   }
@@ -694,7 +926,15 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
               }
             },
           ),
-          IconButton(icon: const Icon(Icons.logout), onPressed: _signOut),
+          IconButton(
+            icon: const Icon(Icons.person),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const StudentProfileScreen()),
+              );
+            },
+          ),
         ],
       ),
       body: _isLoading
@@ -908,6 +1148,8 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                                   );
                                 }
                                 _selectBus(bus);
+                                // Show bus details modal with new features
+                                _showBusDetails(bus);
                               },
                             ),
                           );

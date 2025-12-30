@@ -5,6 +5,7 @@ class UserModel {
   final String email;
   final String role; // 'admin', 'driver', 'student'
   final String? assignedBusId;
+  final String? photoUrl; // Optional profile photo URL
   final DateTime? createdAt;
 
   UserModel({
@@ -13,6 +14,7 @@ class UserModel {
     required this.email,
     required this.role,
     this.assignedBusId,
+    this.photoUrl,
     this.createdAt,
   });
 
@@ -24,6 +26,7 @@ class UserModel {
       email: map['email'] ?? '',
       role: map['role'] ?? 'student',
       assignedBusId: map['assignedBusId'],
+      photoUrl: map['photoUrl'],
       createdAt: map['createdAt']?.toDate(),
     );
   }
@@ -35,6 +38,7 @@ class UserModel {
       'email': email,
       'role': role,
       'assignedBusId': assignedBusId,
+      'photoUrl': photoUrl,
       'createdAt': createdAt ?? DateTime.now(),
     };
   }
@@ -54,6 +58,7 @@ class UserModel {
     String? email,
     String? role,
     String? assignedBusId,
+    String? photoUrl,
     DateTime? createdAt,
   }) {
     return UserModel(
@@ -62,6 +67,7 @@ class UserModel {
       email: email ?? this.email,
       role: role ?? this.role,
       assignedBusId: assignedBusId ?? this.assignedBusId,
+      photoUrl: photoUrl ?? this.photoUrl,
       createdAt: createdAt ?? this.createdAt,
     );
   }

@@ -3,6 +3,8 @@ import '../models/user_model.dart';
 import '../models/bus_model.dart';
 import '../models/route_model.dart';
 import '../models/live_tracking_model.dart';
+import '../models/issue_model.dart';
+import '../models/alarm_model.dart';
 
 /// Database service for Firestore operations
 class DatabaseService {
@@ -42,6 +44,18 @@ class DatabaseService {
     });
   }
 
+  /// Get driver info by ID
+  Future<UserModel?> getDriverById(String driverId) async {
+    final doc = await _firestore.collection('users').doc(driverId).get();
+    if (doc.exists && doc.data() != null) {
+      return UserModel.fromMap(doc.data()!, doc.id);
+    }
+    return null;
+  }
+
+  /// Get any user by ID
+  Future<UserModel?> getUserById(String userId) => getDriverById(userId);
+
   // ==================== BUS OPERATIONS ====================
 
   /// Get all buses
@@ -52,6 +66,9 @@ class DatabaseService {
           .toList();
     });
   }
+
+  /// Get all buses (alias for getBuses)
+  Stream<List<BusModel>> getAllBuses() => getBuses();
 
   /// Get active buses only
   Stream<List<BusModel>> getActiveBuses() {
@@ -196,5 +213,124 @@ class DatabaseService {
   /// Delete live tracking data for a bus
   Future<void> deleteLiveTracking(String busId) async {
     await _firestore.collection('live_tracking').doc(busId).delete();
+  }
+
+  // ==================== ISSUE OPERATIONS ====================
+
+  /// Create a new issue report
+  Future<String> createIssue(IssueModel issue) async {
+    final docRef = await _firestore.collection('issues').add(issue.toMap());
+    return docRef.id;
+  }
+
+  /// Get all issues (for admin)
+  Stream<List<IssueModel>> getAllIssues() {
+    return _firestore
+        .collection('issues')
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snapshot) {
+          return snapshot.docs
+              .map((doc) => IssueModel.fromMap(doc.data(), doc.id))
+              .toList();
+        });
+  }
+
+  /// Get issues by student ID
+  Stream<List<IssueModel>> getStudentIssues(String studentId) {
+    return _firestore
+        .collection('issues')
+        .where('studentId', isEqualTo: studentId)
+        .snapshots()
+        .map((snapshot) {
+          final issues = snapshot.docs
+              .map((doc) => IssueModel.fromMap(doc.data(), doc.id))
+              .toList();
+          // Sort client-side to avoid needing composite index
+          issues.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+          return issues;
+        });
+  }
+
+  /// Update issue status
+  Future<void> updateIssueStatus(String issueId, String status) async {
+    final updateData = <String, dynamic>{'status': status};
+
+    if (status == 'resolved') {
+      updateData['resolvedAt'] = DateTime.now();
+    }
+
+    await _firestore.collection('issues').doc(issueId).update(updateData);
+  }
+
+  /// Delete an issue
+  Future<void> deleteIssue(String issueId) async {
+    await _firestore.collection('issues').doc(issueId).delete();
+  }
+
+  // ==================== ALARM OPERATIONS ====================
+
+  /// Create a new alarm
+  Future<String> createAlarm(AlarmModel alarm) async {
+    final docRef = await _firestore.collection('alarms').add(alarm.toMap());
+    return docRef.id;
+  }
+
+  /// Get alarms for a student
+  Stream<List<AlarmModel>> getStudentAlarms(String studentId) {
+    return _firestore
+        .collection('alarms')
+        .where('studentId', isEqualTo: studentId)
+        .snapshots()
+        .map((snapshot) {
+          // Filter client-side to avoid needing composite index
+          return snapshot.docs
+              .map((doc) => AlarmModel.fromMap(doc.data(), doc.id))
+              .where((alarm) => alarm.isActive)
+              .toList();
+        });
+  }
+
+  /// Get all active alarms for a specific bus
+  Stream<List<AlarmModel>> getAlarmsForBus(String busId) {
+    return _firestore
+        .collection('alarms')
+        .where('busId', isEqualTo: busId)
+        .where('isActive', isEqualTo: true)
+        .where('hasTriggered', isEqualTo: false)
+        .snapshots()
+        .map((snapshot) {
+          return snapshot.docs
+              .map((doc) => AlarmModel.fromMap(doc.data(), doc.id))
+              .toList();
+        });
+  }
+
+  /// Mark alarm as triggered
+  Future<void> triggerAlarm(String alarmId) async {
+    await _firestore.collection('alarms').doc(alarmId).update({
+      'hasTriggered': true,
+      'isActive': false,
+    });
+  }
+
+  /// Deactivate an alarm
+  Future<void> deactivateAlarm(String alarmId) async {
+    await _firestore.collection('alarms').doc(alarmId).update({
+      'isActive': false,
+    });
+  }
+
+  /// Delete an alarm
+  Future<void> deleteAlarm(String alarmId) async {
+    await _firestore.collection('alarms').doc(alarmId).delete();
+  }
+
+  /// Reset alarm for new trip
+  Future<void> resetAlarm(String alarmId) async {
+    await _firestore.collection('alarms').doc(alarmId).update({
+      'hasTriggered': false,
+      'isActive': true,
+    });
   }
 }

@@ -6,6 +6,7 @@ import '../../models/bus_model.dart';
 import '../../models/route_model.dart';
 import '../auth/login_screen.dart';
 import 'map_stop_picker_screen.dart';
+import 'admin_issues_screen.dart';
 
 /// Admin home screen with bus, route, and driver management
 class AdminHomeScreen extends StatefulWidget {
@@ -25,7 +26,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
   }
 
   @override
@@ -65,6 +66,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
             Tab(icon: Icon(Icons.directions_bus), text: 'Buses'),
             Tab(icon: Icon(Icons.route), text: 'Routes'),
             Tab(icon: Icon(Icons.people), text: 'Drivers'),
+            Tab(icon: Icon(Icons.report), text: 'Issues'),
           ],
         ),
       ),
@@ -74,6 +76,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
           _BusesTab(databaseService: _databaseService),
           _RoutesTab(databaseService: _databaseService),
           _DriversTab(databaseService: _databaseService),
+          const AdminIssuesScreen(),
         ],
       ),
     );

@@ -4,7 +4,7 @@ import '../services/auth_service.dart';
 import 'auth/login_screen.dart';
 import 'admin/admin_home_screen.dart';
 import 'driver/driver_home_screen.dart';
-import 'student/student_home_screen.dart';
+import 'student/student_main_screen.dart';
 
 /// Splash screen that checks auth state and navigates accordingly
 class SplashScreen extends StatefulWidget {
@@ -88,7 +88,7 @@ class _SplashScreenState extends State<SplashScreen>
         break;
       case 'student':
       default:
-        homeScreen = const StudentHomeScreen();
+        homeScreen = const StudentMainScreen();
         break;
     }
 
