@@ -5,6 +5,9 @@ import '../models/route_model.dart';
 import '../models/live_tracking_model.dart';
 import '../models/issue_model.dart';
 import '../models/alarm_model.dart';
+import '../models/chat_group_model.dart';
+import '../models/chat_message_model.dart';
+import '../models/join_request_model.dart';
 
 /// Database service for Firestore operations
 class DatabaseService {
@@ -332,5 +335,280 @@ class DatabaseService {
       'hasTriggered': false,
       'isActive': true,
     });
+  }
+
+  // ==================== CHAT GROUP OPERATIONS ====================
+
+  /// Create a chat group for a bus
+  Future<String> createChatGroup({
+    required String busId,
+    required String busNumber,
+    required String driverId,
+    required String driverName,
+  }) async {
+    // Check if group already exists for this bus
+    final existing = await _firestore
+        .collection('chat_groups')
+        .where('busId', isEqualTo: busId)
+        .get();
+
+    if (existing.docs.isNotEmpty) {
+      return existing.docs.first.id;
+    }
+
+    final group = ChatGroupModel(
+      id: '',
+      busId: busId,
+      busNumber: busNumber,
+      driverId: driverId,
+      driverName: driverName,
+      createdAt: DateTime.now(),
+    );
+
+    final docRef = await _firestore
+        .collection('chat_groups')
+        .add(group.toMap());
+    return docRef.id;
+  }
+
+  /// Get chat group for a bus
+  Future<ChatGroupModel?> getChatGroupByBus(String busId) async {
+    final snapshot = await _firestore
+        .collection('chat_groups')
+        .where('busId', isEqualTo: busId)
+        .get();
+
+    if (snapshot.docs.isEmpty) return null;
+    return ChatGroupModel.fromMap(
+      snapshot.docs.first.data(),
+      snapshot.docs.first.id,
+    );
+  }
+
+  /// Get chat group by ID
+  Future<ChatGroupModel?> getChatGroupById(String groupId) async {
+    final doc = await _firestore.collection('chat_groups').doc(groupId).get();
+    if (doc.exists && doc.data() != null) {
+      return ChatGroupModel.fromMap(doc.data()!, doc.id);
+    }
+    return null;
+  }
+
+  /// Stream chat group for a bus
+  Stream<ChatGroupModel?> streamChatGroupByBus(String busId) {
+    return _firestore
+        .collection('chat_groups')
+        .where('busId', isEqualTo: busId)
+        .snapshots()
+        .map((snapshot) {
+          if (snapshot.docs.isEmpty) return null;
+          return ChatGroupModel.fromMap(
+            snapshot.docs.first.data(),
+            snapshot.docs.first.id,
+          );
+        });
+  }
+
+  /// Get driver's chat group
+  Stream<ChatGroupModel?> getDriverChatGroup(String driverId) {
+    return _firestore
+        .collection('chat_groups')
+        .where('driverId', isEqualTo: driverId)
+        .snapshots()
+        .map((snapshot) {
+          if (snapshot.docs.isEmpty) return null;
+          return ChatGroupModel.fromMap(
+            snapshot.docs.first.data(),
+            snapshot.docs.first.id,
+          );
+        });
+  }
+
+  /// Toggle group lock status
+  Future<void> toggleGroupLock(String groupId, bool isLocked) async {
+    await _firestore.collection('chat_groups').doc(groupId).update({
+      'isLocked': isLocked,
+    });
+  }
+
+  /// Toggle group mute status
+  Future<void> toggleGroupMute(String groupId, bool isMuted) async {
+    await _firestore.collection('chat_groups').doc(groupId).update({
+      'isMuted': isMuted,
+    });
+  }
+
+  /// Add member to group
+  Future<void> addMemberToGroup(String groupId, String memberId) async {
+    await _firestore.collection('chat_groups').doc(groupId).update({
+      'memberIds': FieldValue.arrayUnion([memberId]),
+    });
+  }
+
+  /// Remove member from group
+  Future<void> removeMemberFromGroup(String groupId, String memberId) async {
+    await _firestore.collection('chat_groups').doc(groupId).update({
+      'memberIds': FieldValue.arrayRemove([memberId]),
+    });
+  }
+
+  // ==================== CHAT MESSAGE OPERATIONS ====================
+
+  /// Send a message to a group
+  Future<String> sendMessage({
+    required String groupId,
+    required String senderId,
+    required String senderName,
+    required String message,
+    bool isAnnouncement = false,
+  }) async {
+    final chatMessage = ChatMessageModel(
+      id: '',
+      groupId: groupId,
+      senderId: senderId,
+      senderName: senderName,
+      message: message,
+      isAnnouncement: isAnnouncement,
+      createdAt: DateTime.now(),
+    );
+
+    final docRef = await _firestore
+        .collection('chat_messages')
+        .add(chatMessage.toMap());
+    return docRef.id;
+  }
+
+  /// Stream messages for a group
+  Stream<List<ChatMessageModel>> getMessages(String groupId) {
+    return _firestore
+        .collection('chat_messages')
+        .where('groupId', isEqualTo: groupId)
+        .orderBy('createdAt', descending: false)
+        .snapshots()
+        .map((snapshot) {
+          return snapshot.docs
+              .map((doc) => ChatMessageModel.fromMap(doc.data(), doc.id))
+              .toList();
+        });
+  }
+
+  // ==================== JOIN REQUEST OPERATIONS ====================
+
+  /// Create a join request
+  Future<String> createJoinRequest({
+    required String groupId,
+    required String busId,
+    required String studentId,
+    required String studentName,
+  }) async {
+    // Check if request already exists
+    final existing = await _firestore
+        .collection('join_requests')
+        .where('groupId', isEqualTo: groupId)
+        .where('studentId', isEqualTo: studentId)
+        .get();
+
+    if (existing.docs.isNotEmpty) {
+      return existing.docs.first.id;
+    }
+
+    final request = JoinRequestModel(
+      id: '',
+      groupId: groupId,
+      busId: busId,
+      studentId: studentId,
+      studentName: studentName,
+      status: JoinRequestModel.statusPending,
+      createdAt: DateTime.now(),
+    );
+
+    final docRef = await _firestore
+        .collection('join_requests')
+        .add(request.toMap());
+    return docRef.id;
+  }
+
+  /// Get pending join requests for a group
+  Stream<List<JoinRequestModel>> getPendingJoinRequests(String groupId) {
+    return _firestore
+        .collection('join_requests')
+        .where('groupId', isEqualTo: groupId)
+        .where('status', isEqualTo: JoinRequestModel.statusPending)
+        .snapshots()
+        .map((snapshot) {
+          return snapshot.docs
+              .map((doc) => JoinRequestModel.fromMap(doc.data(), doc.id))
+              .toList();
+        });
+  }
+
+  /// Get join request for a student and group
+  Future<JoinRequestModel?> getStudentJoinRequest(
+    String groupId,
+    String studentId,
+  ) async {
+    final snapshot = await _firestore
+        .collection('join_requests')
+        .where('groupId', isEqualTo: groupId)
+        .where('studentId', isEqualTo: studentId)
+        .get();
+
+    if (snapshot.docs.isEmpty) return null;
+    return JoinRequestModel.fromMap(
+      snapshot.docs.first.data(),
+      snapshot.docs.first.id,
+    );
+  }
+
+  /// Stream student's join request status
+  Stream<JoinRequestModel?> streamStudentJoinRequest(
+    String groupId,
+    String studentId,
+  ) {
+    return _firestore
+        .collection('join_requests')
+        .where('groupId', isEqualTo: groupId)
+        .where('studentId', isEqualTo: studentId)
+        .snapshots()
+        .map((snapshot) {
+          if (snapshot.docs.isEmpty) return null;
+          return JoinRequestModel.fromMap(
+            snapshot.docs.first.data(),
+            snapshot.docs.first.id,
+          );
+        });
+  }
+
+  /// Approve a join request
+  Future<void> approveJoinRequest(String requestId) async {
+    final doc = await _firestore
+        .collection('join_requests')
+        .doc(requestId)
+        .get();
+    if (!doc.exists) return;
+
+    final request = JoinRequestModel.fromMap(doc.data()!, doc.id);
+
+    // Update request status
+    await _firestore.collection('join_requests').doc(requestId).update({
+      'status': JoinRequestModel.statusApproved,
+      'respondedAt': DateTime.now(),
+    });
+
+    // Add student to group members
+    await addMemberToGroup(request.groupId, request.studentId);
+  }
+
+  /// Reject a join request
+  Future<void> rejectJoinRequest(String requestId) async {
+    await _firestore.collection('join_requests').doc(requestId).update({
+      'status': JoinRequestModel.statusRejected,
+      'respondedAt': DateTime.now(),
+    });
+  }
+
+  /// Delete a join request
+  Future<void> deleteJoinRequest(String requestId) async {
+    await _firestore.collection('join_requests').doc(requestId).delete();
   }
 }

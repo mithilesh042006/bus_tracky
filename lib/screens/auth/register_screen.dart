@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../../services/auth_service.dart';
 import '../admin/admin_home_screen.dart';
 import '../driver/driver_home_screen.dart';
-import '../student/student_home_screen.dart';
+import '../student/student_main_screen.dart';
 
 /// Registration screen for new users
 class RegisterScreen extends StatefulWidget {
@@ -70,7 +70,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             break;
           case 'student':
           default:
-            homeScreen = const StudentHomeScreen();
+            homeScreen = const StudentMainScreen();
             break;
         }
 

@@ -3,7 +3,7 @@ import '../../services/auth_service.dart';
 import 'register_screen.dart';
 import '../admin/admin_home_screen.dart';
 import '../driver/driver_home_screen.dart';
-import '../student/student_home_screen.dart';
+import '../student/student_main_screen.dart';
 
 /// Login screen for user authentication
 class LoginScreen extends StatefulWidget {
@@ -58,7 +58,7 @@ class _LoginScreenState extends State<LoginScreen> {
             break;
           case 'student':
           default:
-            homeScreen = const StudentHomeScreen();
+            homeScreen = const StudentMainScreen();
             break;
         }
 

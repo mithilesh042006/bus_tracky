@@ -9,6 +9,7 @@ import '../../services/directions_service.dart';
 import '../../models/bus_model.dart';
 import '../../models/route_model.dart';
 import '../auth/login_screen.dart';
+import 'driver_chat_screen.dart';
 
 /// Driver home screen with trip management and location streaming
 class DriverHomeScreen extends StatefulWidget {
@@ -519,6 +520,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         foregroundColor: Colors.white,
         elevation: 0,
         actions: [
+          if (_assignedBus != null)
+            IconButton(
+              icon: const Icon(Icons.chat),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => DriverChatScreen(bus: _assignedBus!),
+                  ),
+                );
+              },
+              tooltip: 'Group Chat',
+            ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadDriverData,
